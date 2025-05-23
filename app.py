@@ -30,21 +30,128 @@ with st.sidebar:
     # Stock ticker input
     ticker = st.text_input("Stock Ticker", value="AAPL", help="Enter stock symbol (e.g., AAPL, TSLA)")
     
-    # Option type
-    option_type = st.radio("Option Type", ["Call", "Put"])
+    # Initialize session state for options data
+    if 'options_data' not in st.session_state:
+        st.session_state.options_data = None
+    if 'selected_expiry' not in st.session_state:
+        st.session_state.selected_expiry = None
     
-    # Strike price
-    col1, col2 = st.columns(2)
-    with col1:
+    # Fetch available options when ticker changes
+    try:
+        stock = yf.Ticker(ticker)
+        
+        # Get available expiration dates
+        expiry_dates = stock.options
+        
+        if len(expiry_dates) > 0:
+            # Option type
+            option_type = st.radio("Option Type", ["Call", "Put"])
+            
+            # Expiration date selector
+            expiration_date_str = st.selectbox(
+                "Select Expiration Date",
+                expiry_dates,
+                help="Available expiration dates for this option"
+            )
+            
+            # Convert string to date
+            expiration_date = datetime.strptime(expiration_date_str, '%Y-%m-%d').date()
+            
+            # Get option chain for selected expiry
+            opt_chain = stock.option_chain(expiration_date_str)
+            
+            if option_type == "Call":
+                options_df = opt_chain.calls
+            else:
+                options_df = opt_chain.puts
+            
+            # Get available strikes
+            available_strikes = sorted(options_df['strike'].unique())
+            
+            # Find default strike (closest to current price)
+            try:
+                current_price = stock.info.get('currentPrice', stock.info.get('regularMarketPrice', 100))
+            except:
+                current_price = 100
+            
+            closest_strike_idx = min(range(len(available_strikes)), 
+                                   key=lambda i: abs(available_strikes[i] - current_price))
+            
+            # Strike price selector
+            strike_price = st.selectbox(
+                "Select Strike Price ($)",
+                available_strikes,
+                index=closest_strike_idx,
+                help="Available strike prices for selected expiration"
+            )
+            
+            # Display market data for selected option
+            selected_option = options_df[options_df['strike'] == strike_price].iloc[0]
+            
+            with st.expander("📊 Market Data for Selected Option"):
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.metric("Last Price", f"${selected_option.get('lastPrice', 0):.2f}")
+                    st.metric("Bid", f"${selected_option.get('bid', 0):.2f}")
+                    st.metric("Ask", f"${selected_option.get('ask', 0):.2f}")
+                with col2:
+                    st.metric("Volume", f"{selected_option.get('volume', 0):,}")
+                    st.metric("Open Interest", f"{selected_option.get('openInterest', 0):,}")
+                    st.metric("Implied Volatility", f"{selected_option.get('impliedVolatility', 0)*100:.1f}%")
+            
+            # Option to use market implied volatility
+            use_market_iv = st.checkbox("Use Market Implied Volatility", value=True)
+            
+            if use_market_iv and selected_option.get('impliedVolatility', 0) > 0:
+                volatility = selected_option['impliedVolatility']
+                st.info(f"Using market IV: {volatility*100:.1f}%")
+            else:
+                # Manual volatility input
+                volatility = st.number_input(
+                    "Volatility (%)", 
+                    min_value=0.1, 
+                    max_value=200.0, 
+                    value=20.0, 
+                    step=1.0,
+                    help="Annual implied volatility (e.g., 20.0 for 20%)"
+                ) / 100
+        else:
+            st.error(f"No options data available for {ticker}")
+            # Fallback to manual inputs
+            option_type = st.radio("Option Type", ["Call", "Put"])
+            strike_price = st.number_input("Strike Price ($)", min_value=0.01, value=150.0, step=1.0)
+            expiration_date = st.date_input(
+                "Expiration Date",
+                min_value=datetime.now().date() + timedelta(days=1),
+                value=datetime.now().date() + timedelta(days=30)
+            )
+            volatility = st.number_input(
+                "Volatility (%)", 
+                min_value=0.1, 
+                max_value=200.0, 
+                value=20.0, 
+                step=1.0,
+                help="Annual implied volatility (e.g., 20.0 for 20%)"
+            ) / 100
+            
+    except Exception as e:
+        st.warning(f"Could not fetch options data: {str(e)}")
+        # Fallback to manual inputs
+        option_type = st.radio("Option Type", ["Call", "Put"])
         strike_price = st.number_input("Strike Price ($)", min_value=0.01, value=150.0, step=1.0)
-    
-    # Expiration date
-    with col2:
         expiration_date = st.date_input(
             "Expiration Date",
             min_value=datetime.now().date() + timedelta(days=1),
             value=datetime.now().date() + timedelta(days=30)
         )
+        volatility = st.number_input(
+            "Volatility (%)", 
+            min_value=0.1, 
+            max_value=200.0, 
+            value=20.0, 
+            step=1.0,
+            help="Annual implied volatility (e.g., 20.0 for 20%)"
+        ) / 100
     
     # Risk-free rate
     risk_free_rate = st.number_input(
@@ -54,16 +161,6 @@ with st.sidebar:
         value=5.0, 
         step=0.1,
         help="Annual risk-free interest rate (e.g., 5.0 for 5%)"
-    ) / 100
-    
-    # Volatility
-    volatility = st.number_input(
-        "Volatility (%)", 
-        min_value=0.1, 
-        max_value=200.0, 
-        value=20.0, 
-        step=1.0,
-        help="Annual implied volatility (e.g., 20.0 for 20%)"
     ) / 100
     
     st.divider()
